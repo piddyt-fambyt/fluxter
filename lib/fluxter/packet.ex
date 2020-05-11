@@ -27,11 +27,22 @@ defmodule Fluxter.Packet do
       ] ++ anc_data_part
   end
 
-  def build(header, name, tags, fields) do
+  @spec build(any, any, any, any, any) :: [...]
+  def build(header, name, tags, fields, timestamp) do
     tags = encode_tags(tags)
     fields = encode_fields(fields)
-    [header, encode_key(name), tags, ?\s, fields]
+    timestamp = encode_timestamps(timestamp)
+#    [header, encode_key(name), tags, ?\s, fields, ?\s, timestamp]
+    [header, encode_key(name), tags, ?\s, fields, timestamp]
   end
+
+  defp encode_timestamps(timestamp) when is_integer(timestamp) do
+    [?\s, Integer.to_string(timestamp * 1000000000)]
+#    timestamp * 1000000000
+#    |> Integer.to_string()
+  end
+
+  defp encode_timestamps(timestamp) when is_nil(timestamp), do: ""
 
   defp encode_tags([]), do: ""
 

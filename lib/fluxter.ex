@@ -92,6 +92,7 @@ defmodule Fluxter do
   @type tags :: [{String.Chars.t(), String.Chars.t()}]
   @type field_value :: number | boolean | binary
   @type fields :: [{String.Chars.t(), field_value}]
+  @type timestamp :: number | nil
   @opaque counter :: pid
 
   @doc """
@@ -158,132 +159,13 @@ defmodule Fluxter do
       :ok
 
   """
-  @callback write(measurement, tags, field_value | fields) :: :ok
+  @callback write(measurement, tags, field_value | fields, timestamp) :: :ok
 
   @doc """
   Should be the same as `write(measurement, [], fields)`.
   """
-  @callback write(measurement, field_value | fields) :: :ok
+  @callback write(measurement, field_value | fields, timestamp) :: :ok
 
-  @doc """
-  Should be the same as `measure(measurement, [], [], fun_or_mfa)`.
-  """
-  @callback measure(measurement, (() -> result) | mfa()) :: result when result: var
-
-  @doc """
-  Should be the same as `measure(measurement, tags, [], fun_or_mfa)`.
-  """
-  @callback measure(measurement, tags, (() -> result) | mfa()) :: result when result: var
-
-  @doc """
-  Measures the execution time of `fun_or_mfa` and writes it as a metric.
-
-  This function is just an utility function to measure the execution time of a
-  given function `fun_or_mfa`. The `measurement` and `tags` arguments work in the same way as
-  in `c:write/3`.
-
-  `fun_or_mfa`'s execution time is prepended as a field called `value` to the already
-  existing list of `fields`. This means that if there's already a field called
-  `value` in `fields`, it will be overridden by the measurement. This also means
-  that `fields` must be a list of key-value pairs (field name and value): simple
-  floats, integers, booleans, and binaries as values for `fields` are not
-  supported like they are in `c:write/3`.
-
-  This function returns whatever `fun` returns.
-
-  ## Examples
-
-  Assuming a `MyApp.Fluxter` Fluxter pool exists:
-
-      iex> MyApp.Fluxter.measure "task_exec_time", [host: "us-east"], fn ->
-      ...>   1 + 1
-      ...> end
-      2
-
-  """
-  @callback measure(measurement, tags, fields, (() -> result) | mfa()) :: result when result: var
-
-  @doc """
-  Should be the same as `start_counter(measurement, [], [])`.
-  """
-  @callback start_counter(measurement) :: counter
-
-  @doc """
-  Should be the same as `start_counter(measurement, tags, [])`.
-  """
-  @callback start_counter(measurement, tags) :: counter
-
-  @doc """
-  Starts a counter for a metric.
-
-  The purpose of this counter is to aggregate a numeric metric: values aggregated
-  in the counter will only be written to the storage as a single metric when the
-  counter is "flushed" (see `c:flush_counter/1`). `tags` and `fields` will be tags
-  and fields attached to the metric when it's flushed. The aggregated value of
-  the metric will be prepended to `fields` as a field called `value`; this means
-  that if there's already a field called `value` in `fields`, it will be
-  overridden.
-
-  This function spawns a process that is linked to the caller process.
-  The linking part is important because it means that if the parent process dies,
-  the counter will be terminated as well and its aggregated metric will be lost.
-
-  See the "Metric aggregation" section in the documentation for `Fluxter` for more
-  information on counters.
-
-  ## Examples
-
-  Assuming a `MyApp.Fluxter` Fluxter pool exists:
-
-      iex> MyApp.Fluxter.start_counter("hits", [host: "us-west"])
-      {:ok, #PID<...>}
-
-  """
-  @callback start_counter(measurement, tags, fields) :: counter
-
-  @doc """
-  Adds the `extra` value to the given `counter`.
-
-  This function adds the `extra` value (a number) to the current value of the
-  given `counter`. To subtract, just use a negative number to add to the current
-  value of `counter`.
-
-  This function performs a *fire-and-forget* operation (a cast) on the given
-  counter, hence it will always return `:ok`.
-
-  See the "Metric aggregation" section in the documentation for `Fluxter` for more
-  information on counters.
-
-  ## Examples
-
-  Assuming a `MyApp.Fluxter` Fluxter pool exists:
-
-      iex> MyApp.Fluxter.increment_counter(counter, 1)
-      :ok
-
-  """
-  @callback increment_counter(counter, extra :: number) :: :ok
-
-  @doc """
-  Flushes the given `counter` by writing its aggregated value as a single metric.
-
-  This function performs a *fire-and-forget* operation (a cast) on the given
-  counter, hence it will always return `:ok`.
-
-  This function will also stop the `counter` process after the metric is flushed.
-
-  See the "Metric aggregation" section in the documentation for `Fluxter` for more
-  information on counters.
-
-  ## Examples
-
-  Assuming a `MyApp.Fluxter` Fluxter pool exists:
-
-      iex> MyApp.Fluxter.flush_counter(counter)
-      :ok
-
-  """
-  @callback flush_counter(counter) :: :ok
 
   @doc false
   defmacro __using__(_opts) do
@@ -326,46 +208,20 @@ defmodule Fluxter do
         end
       end
 
-      def write(measurement, tags \\ [], fields)
+      def write(measurement, tags \\ [], fields, timestamp \\ nil)
 
-      def write(measurement, tags, fields) when is_list(fields) do
+      def write(measurement, tags, fields, timestamp) when is_list(fields) do
         [:positive]
         |> System.unique_integer()
         |> rem(@pool_size)
         |> worker_name()
-        |> Fluxter.Conn.write(measurement, tags, fields)
+        |> Fluxter.Conn.write(measurement, tags, fields, timestamp)
       end
 
-      def write(measurement, tags, value)
+      def write(measurement, tags, value, timestamp)
           when is_float(value) or is_integer(value)
           when is_boolean(value) or is_binary(value) do
-        write(measurement, tags, value: value)
-      end
-
-      def measure(measurement, tags \\ [], fields \\ [], fun_or_mfa) do
-        {elapsed_time, result} =
-          case fun_or_mfa do
-            fun when is_function(fun, 0) ->
-              :timer.tc(fun)
-
-            {module, fun, arguments} ->
-              :timer.tc(module, fun, arguments)
-          end
-
-        write(measurement, tags, [value: elapsed_time] ++ fields)
-        result
-      end
-
-      def start_counter(measurement, tags \\ [], fields \\ []) do
-        Fluxter.Counter.start(measurement, tags, fields)
-      end
-
-      def increment_counter(counter, change \\ 1) do
-        Fluxter.Counter.increment(counter, change)
-      end
-
-      def flush_counter(counter) do
-        Fluxter.Counter.flush(counter, __MODULE__)
+        write(measurement, tags, [value: value], timestamp)
       end
     end
   end

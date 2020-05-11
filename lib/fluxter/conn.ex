@@ -23,9 +23,16 @@ defmodule Fluxter.Conn do
     GenServer.start_link(__MODULE__, conn, name: worker)
   end
 
-  def write(worker, name, tags, fields)
+  @spec write(
+          atom | pid | {atom, any} | {:via, atom, any},
+          binary | maybe_improper_list,
+          maybe_improper_list,
+          maybe_improper_list,
+          number
+        ) :: :ok
+  def write(worker, name, tags, fields, timestamp)
       when (is_binary(name) or is_list(name)) and is_list(tags) and is_list(fields) do
-    GenServer.cast(worker, {:write, name, tags, fields})
+    GenServer.cast(worker, {:write, name, tags, fields, timestamp})
   end
 
   def init(conn) do
@@ -33,8 +40,8 @@ defmodule Fluxter.Conn do
     {:ok, %{conn | sock: sock}}
   end
 
-  def handle_cast({:write, name, tags, fields}, conn) do
-    packet = Packet.build(conn.header, name, tags, fields)
+  def handle_cast({:write, name, tags, fields, timestamp}, conn) do
+    packet = Packet.build(conn.header, name, tags, fields, timestamp)
     send(conn.sock, {self(), {:command, packet}})
     {:noreply, conn}
   end
